@@ -4,16 +4,19 @@ library("plotly")
 library("leaflet")
 library("leaflet.extras")
 
-library("readr")
+# library("readr")
 library("tidyr")
 library("dplyr")
 library("lubridate")
 
-df <- read_csv(file = "dummy-data.csv", 
-               col_types = cols(
-                   .default = col_character()
-               )
-)
+# -- data loading
+# shapefile <- readOGR('https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&format=GeoJSON')
+
+load("dummy-data.Rdata")
+
+ntas_data <- shapefile@data
+
+my_pal <- c('#4cc9f0', "#3a0ca3", "#f72585")
 
 clean_data <- function(df){
     df_cleaned <- df %>% 
@@ -46,7 +49,8 @@ ui <- fluidPage(
     titlePanel("NYPD Explorer"),
     title = "NYPD Explorer",
     
-    themeSelector(),
+    # themeSelector(),
+    theme = shinytheme("darkly"),
     
     sidebarLayout(
         
@@ -65,7 +69,7 @@ ui <- fluidPage(
             
             radioButtons(
                 inputId = "by", 
-                label = "Analyze by:", 
+                label = "Search by:", 
                 choices = c("Borough", "Location"), 
                 selected = "Borough", 
                 inline = TRUE
@@ -106,13 +110,13 @@ ui <- fluidPage(
                     
                     title = "Plots",
                     
-                    plotlyOutput(outputId = "timeseries", height = "80%"),
+                    plotlyOutput(outputId = "timeseries", height = "40%"),
                     
                     fluidRow(
                         
                         column(
                             width = 8,
-                            leafletOutput("map", height = "40%")
+                            leafletOutput(outputId = "map", width = "80%", height = "600px")
                         ),
                         
                         column(
@@ -133,6 +137,8 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
     
+    # --the ui options change depending on whether user wants to filter data based on boroughs
+    # or a point location and a radius
     output$byoptions <- renderUI({
         
         if(input$by == "Borough"){
@@ -169,6 +175,95 @@ server <- function(input, output, session) {
                 )
             )
         }
+    })
+    
+    output$timeseries <- renderPlotly(
+        
+        df_cleaned %>%
+            count(datetime, name = "n_crimes") %>% 
+            plot_ly(
+                x = ~datetime, 
+                y = ~n_crimes, 
+                height = 150,
+                type = 'scatter',
+                mode = "lines+markers",
+                marker = list(color = my_pal[1]),
+                line = list(color = my_pal[1])
+            ) %>% 
+            layout(
+                xaxis = list(title = 'Date'),
+                yaxis = list(title = 'No. of Crimes'),
+                margin = list(l = 10, r = 10, t = 10, b = 10),
+                plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                paper_bgcolor = "rgba(0, 0, 0, 0)",
+                font = list(color = '#FFFFFF', size = 10)
+            )
+    )
+    
+    params <- reactiveValues(
+        lat = mean(df_cleaned$latitude),
+        lng = mean(df_cleaned$longitude)
+    )
+    
+    df_merged <- reactive({
+        df_cleaned %>%
+            st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
+            group_by(id) %>%
+            mutate(geometry = st_combine(geometry)) %>%
+            ungroup() %>%
+            st_join(st_as_sf(shapefile))
+    })
+    
+    # -- basic map
+    output$map <- renderLeaflet({
+        
+        leaflet(data = shapefile) %>% 
+            addProviderTiles(provider = "Stamen.Toner") %>%
+            setView(
+                zoom = 12, 
+                lat = params$lat, 
+                lng = params$lng
+            )
+        
+    })
+    
+    crime_count <- reactive({
+        
+        crimes_count <- df_merged() %>%
+            st_set_geometry(NULL) %>%
+            count(ntacode, sort = TRUE, name = "n_crimes")
+        
+        shapefile@data <- merge(ntas_data, crimes_count, sort = FALSE, by = "ntacode")
+        
+        return(shapefile)
+        
+    })
+    
+    # -- replace layer according to user inputs
+    observe({
+        ntas <- crime_count()
+        
+        bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = 1)
+        
+        pal <- colorBin("BuPu", domain = ntas@data$n_crimes, bins = bins)
+        
+        leafletProxy("map", data = ntas) %>% 
+            addPolygons(
+                fillColor = ~ pal(n_crimes),
+                popup = ~ paste0("<b>", ntaname, ":</b> ", n_crimes, " crime(s)"),
+                weight = 2,
+                opacity = 1,
+                color = "black",
+                dashArray = "1",
+                fillOpacity = 0.85
+            ) %>%
+            addLegend(
+                pal = pal,
+                values = ~n_crimes,
+                opacity = 0.85,
+                position = "bottomright",
+                title = "Number of crimes by NTA"
+            )
     })
 }
 
