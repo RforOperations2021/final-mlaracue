@@ -4,6 +4,43 @@ library("plotly")
 library("leaflet")
 library("leaflet.extras")
 
+library("readr")
+library("tidyr")
+library("dplyr")
+library("lubridate")
+
+df <- read_csv(file = "dummy-data.csv", 
+               col_types = cols(
+                   .default = col_character()
+               )
+)
+
+clean_data <- function(df){
+    df_cleaned <- df %>% 
+        mutate_at(.vars = c("boro_nm", "law_cat_cd", "ofns_desc"),
+                  .funs = str_to_title) %>% 
+        mutate_at(.vars = c("latitude", "longitude"),
+                  .funs = as.numeric) %>% 
+        mutate(id = 1:nrow(.),
+               cmplnt_fr_dt = str_replace_all(cmplnt_fr_dt, 
+                                              pattern = "T00:00:00.000",
+                                              replacement = ""),
+               datetime = paste(cmplnt_fr_dt, " ", cmplnt_fr_tm),
+               datetime = as_datetime(datetime),
+               dayofweek = wday(datetime, label = TRUE, abbr = TRUE),
+               hour = hour(datetime)
+        ) %>% 
+        select(-cmplnt_fr_dt, -cmplnt_fr_tm)
+    
+    return(df_cleaned)
+}
+
+df_cleaned <- clean_data(df)
+
+offenses <- unique(df_cleaned$law_cat_cd)
+
+boroughs <- unique(df_cleaned$boro_nm)
+
 ui <- fluidPage(
     
     titlePanel("NYPD Explorer"),
@@ -20,10 +57,10 @@ ui <- fluidPage(
             dateRangeInput(
                 inputId = "dates", 
                 label = "Select date range:",
-                start = "2021-01-01",
-                end = "2021-01-25",
+                start = "2019-01-01",
+                end = "2020-12-31",
                 min = "2019-01-01",
-                max = "2021-01-25"
+                max = "2020-12-31"
             ),
             
             radioButtons(
@@ -39,7 +76,7 @@ ui <- fluidPage(
             selectInput(
                 inputId = "offense",
                 label = "Level of offense:",
-                choices = c("All", "Misdemeanor", "Violation", "Felony"),
+                choices = c("All", offenses),
                 selected = "All",
                 multiple = FALSE
             ),
@@ -51,6 +88,11 @@ ui <- fluidPage(
                 min = 0,
                 max = 10000,
                 step = 100
+            ),
+            
+            actionButton(
+                inputId = "go",
+                label = "Retrieve Data"
             )
         ),
         
@@ -76,14 +118,6 @@ ui <- fluidPage(
                         column(
                             width = 4,
                             
-                            radioButtons(
-                                inputId = "perspective", 
-                                label = "Select one:", 
-                                choices = c("All", "Level of Offense"), 
-                                selected = "All", 
-                                inline = TRUE
-                            ),
-                            
                             plotlyOutput(outputId = "barplot"),
                             
                             plotlyOutput(outputId = "lineplot")
@@ -106,7 +140,7 @@ server <- function(input, output, session) {
             selectInput(
                 inputId = "borough",
                 label = "Select a Borough:",
-                choices = c("Manhattan", "Brooklyn", "Bronx", "Queens", "Staten Island"),
+                choices = boroughs,
                 multiple = TRUE,
                 selectize = TRUE
             )
