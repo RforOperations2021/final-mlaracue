@@ -4,9 +4,10 @@ library("plotly")
 library("leaflet")
 library("leaflet.extras")
 
-# library("readr")
+library("sf")
 library("tidyr")
 library("dplyr")
+library("stringr")
 library("lubridate")
 
 # -- data loading
@@ -14,9 +15,10 @@ library("lubridate")
 
 load("dummy-data.Rdata")
 
-ntas_data <- shapefile@data
+ntas_data <- shapefile@data # to preserve original data and use it for merging
 
-my_pal <- c('#4cc9f0', "#3a0ca3", "#f72585")
+# my_pal <- c('#4cc9f0', "#3a0ca3", "#f72585")
+my_pal <- rev(c('#007f5f', "#aacc00", "#ffff3f"))
 
 clean_data <- function(df){
     df_cleaned <- df %>% 
@@ -132,6 +134,8 @@ ui <- fluidPage(
                         column(
                             width = 4,
                             
+                            uiOutput("showopts"),
+                            
                             br(),
                             
                             h5("Number of Crimes by Day of the Week"),
@@ -195,6 +199,23 @@ server <- function(input, output, session) {
         }
     })
     
+    # -- this filter is only shown when no specific level of offense is selected
+    output$showopts <- renderUI({
+        
+        if(input$offense == "All"){
+            
+            radioButtons(
+                inputId = "offense2",
+                label = "Select one:",
+                choices = c('All', 'Level of offense'),
+                selected = 'All',
+                inline = TRUE
+            )
+            
+        }
+    })
+    
+    # -- time series for plot on the top of the app
     output$timeseries <- renderPlotly(
         
         df_cleaned %>%
@@ -217,11 +238,13 @@ server <- function(input, output, session) {
             )
     )
     
+    # -- reactive values with mean of lat and lng based on data obs
     params <- reactiveValues(
         lat = mean(df_cleaned$latitude),
         lng = mean(df_cleaned$longitude)
     )
     
+    # -- crime data merged with NTAs Polygons dataframe
     df_merged <- reactive({
         df_cleaned %>%
             st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
@@ -244,6 +267,7 @@ server <- function(input, output, session) {
         
     })
     
+    # -- compute crime counts by ntacode and append to shapefile
     crime_count <- reactive({
         
         crimes_count <- df_merged() %>%
@@ -261,6 +285,7 @@ server <- function(input, output, session) {
         
         if(input$type == "Heatmap"){
             
+            # remove previous layers so they're not displayed on top of each other
             leafletProxy("map") %>%
                 clearMarkers() %>%
                 clearControls()
@@ -271,7 +296,7 @@ server <- function(input, output, session) {
             
             bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = crimes_std)
             
-            pal <- colorBin("BuPu", domain = ntas@data$n_crimes, bins = bins)
+            pal <- colorBin("viridis", domain = ntas@data$n_crimes, bins = bins)
             
             leafletProxy("map", data = ntas) %>% 
                 addPolygons(
@@ -292,11 +317,13 @@ server <- function(input, output, session) {
                 )
             
         } else if(input$type == "CircleMarkers"){
-
+            
+            # remove previous layers so they're not displayed on top of each other
             leafletProxy("map") %>%
                 clearShapes() %>%
                 clearControls()
             
+            # for the markers, I use lat, lng coordinates from filtered df.
             heatmap_data <- df_cleaned %>%
                 select(law_cat_cd, ofns_desc, longitude, latitude)
             
@@ -308,7 +335,8 @@ server <- function(input, output, session) {
                     lat = ~latitude,
                     radius = 5,
                     popup = ~ ofns_desc,
-                    color = ~pal2(law_cat_cd)
+                    color = ~pal2(law_cat_cd),
+                    opacity = 0.7
                 ) %>%
                 addLegend(
                     pal = pal2,
@@ -320,44 +348,102 @@ server <- function(input, output, session) {
     
     output$barplot <- renderPlotly(
         
-        df_cleaned %>%
-            count(dayofweek, name = "n_crimes") %>% 
-            plot_ly(
-                y = ~dayofweek, 
-                x = ~n_crimes, 
-                height = 250,
-                type = 'bar',
-                marker = list(color = my_pal[1])
-            ) %>% 
-            layout(
-                yaxis = list(title = 'Day of the Week'),
-                xaxis = list(title = 'No. of Crimes'),
-                margin = list(l = 10, r = 10, t = 10, b = 10),
-                plot_bgcolor  = "rgba(0, 0, 0, 0)",
-                paper_bgcolor = "rgba(0, 0, 0, 0)",
-                font = list(color = '#FFFFFF', size = 10)
-            )
+        if(input$offense2 == "All"){
+            
+            fig <- df_cleaned %>%
+                count(dayofweek, name = "n_crimes") %>% 
+                plot_ly(
+                    y = ~dayofweek, 
+                    x = ~n_crimes, 
+                    height = 200,
+                    type = 'bar',
+                    marker = list(color = my_pal[1])
+                ) %>% 
+                layout(
+                    yaxis = list(title = 'Day of the Week'),
+                    xaxis = list(title = 'No. of Crimes'),
+                    margin = list(l = 10, r = 10, t = 10, b = 10),
+                    plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                    paper_bgcolor = "rgba(0, 0, 0, 0)",
+                    font = list(color = '#FFFFFF', size = 10)
+                )
+            
+        } else {
+            
+            fig <- df_cleaned %>%
+                count(law_cat_cd, dayofweek, name = "n_crimes") %>% 
+                plot_ly(
+                    y = ~dayofweek, 
+                    x = ~n_crimes, 
+                    color = ~law_cat_cd,
+                    height = 200,
+                    type = 'bar',
+                    colors = my_pal
+                ) %>% 
+                layout(
+                    yaxis = list(title = 'Day of the Week'),
+                    xaxis = list(title = 'No. of Crimes'),
+                    margin = list(l = 10, r = 10, t = 10, b = 5),
+                    plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                    paper_bgcolor = "rgba(0, 0, 0, 0)",
+                    font = list(color = '#FFFFFF', size = 10),
+                    legend = list(orientation = 'h', y = -0.5),
+                    barmode = 'stack'
+                )
+        }
+
     )
     
     output$lineplot <- renderPlotly(
         
-        df_cleaned %>%
-            count(hour, name = "n_crimes") %>% 
-            plot_ly(
-                x = ~hour, 
-                y = ~n_crimes, 
-                height = 250,
-                type = 'bar',
-                marker = list(color = my_pal[1])
-            ) %>% 
-            layout(
-                yaxis = list(title = 'No. of Crimes'),
-                xaxis = list(title = 'Hour'),
-                margin = list(l = 10, r = 10, t = 10, b = 10),
-                plot_bgcolor  = "rgba(0, 0, 0, 0)",
-                paper_bgcolor = "rgba(0, 0, 0, 0)",
-                font = list(color = '#FFFFFF', size = 10)
-            )
+        if(input$offense2 == "All"){
+            
+            fig <- df_cleaned %>%
+                count(hour, name = "n_crimes") %>% 
+                plot_ly(
+                    x = ~hour, 
+                    y = ~n_crimes, 
+                    height = 200,
+                    type = 'scatter',
+                    mode = "lines",
+                    marker = list(color = my_pal[1]),
+                    line = list(color = my_pal[1])
+                ) %>% 
+                layout(
+                    yaxis = list(title = 'No. of Crimes'),
+                    xaxis = list(title = 'Hour'),
+                    margin = list(l = 10, r = 10, t = 10, b = 10),
+                    plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                    paper_bgcolor = "rgba(0, 0, 0, 0)",
+                    font = list(color = '#FFFFFF', size = 10)
+                )
+            
+        } else {
+            
+            fig <- df_cleaned %>%
+                count(law_cat_cd, hour, name = "n_crimes") %>% 
+                plot_ly(
+                    x = ~hour, 
+                    y = ~n_crimes, 
+                    color = ~law_cat_cd,
+                    height = 200,
+                    type = 'scatter',
+                    mode = "lines",
+                    colors = my_pal,
+                    line = list(color = my_pal)
+                ) %>% 
+                layout(
+                    yaxis = list(title = 'No. of Crimes'),
+                    xaxis = list(title = 'Hour'),
+                    margin = list(l = 10, r = 10, t = 10, b = 5),
+                    plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                    paper_bgcolor = "rgba(0, 0, 0, 0)",
+                    font = list(color = '#FFFFFF', size = 10),
+                    legend = list(orientation = 'h', y = -0.5),
+                    barmode = 'stack'
+                )
+        }
+        
     )
     
 }
