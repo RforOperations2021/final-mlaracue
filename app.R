@@ -10,8 +10,12 @@ library("dplyr")
 library("stringr")
 library("lubridate")
 
+library("yaml")
+library("RSocrata")
+
 # -- data loading
 # shapefile <- readOGR('https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&format=GeoJSON')
+access_info <- yaml.load_file(input = "credentials.yaml")
 
 load("dummy-data.Rdata")
 
@@ -36,16 +40,12 @@ clean_data <- function(df){
                hour = hour(datetime)
         ) %>% 
         select(-cmplnt_fr_dt, -cmplnt_fr_tm) %>% 
-        filter(datetime >= "2020-12-24")
+        filter(!is.na(boro_nm))
     
     return(df_cleaned)
 }
 
-df_cleaned <- clean_data(df)
-
-offenses <- unique(df_cleaned$law_cat_cd)
-
-boroughs <- unique(df_cleaned$boro_nm)
+# df_cleaned <- clean_data(df) %>% filter(datetime >= "2020-12-24")
 
 ui <- fluidPage(
     
@@ -83,11 +83,12 @@ ui <- fluidPage(
             selectInput(
                 inputId = "offense",
                 label = "Level of offense:",
-                choices = c("All", offenses),
+                choices = c("All", "Misdemeanor", "Felony", "Violation"),
                 selected = "All",
                 multiple = FALSE
             ),
             
+            # TODO: control sample size or send a message to user warning processing times
             numericInput(
                 inputId = "size",
                 label = "Sample size:",
@@ -168,7 +169,7 @@ server <- function(input, output, session) {
             selectInput(
                 inputId = "borough",
                 label = "Select a Borough:",
-                choices = boroughs,
+                choices = c("Manhattan", "Brooklyn", "Bronx", "Queens", "Staten Island"),
                 multiple = TRUE,
                 selectize = TRUE
             )
@@ -177,7 +178,7 @@ server <- function(input, output, session) {
             
             column(
                 width = 12,
-                
+                # TODO: control lat and lng so it's not outside NYC
                 numericInput(
                     inputId = "lat", 
                     label = "Latitude:",
@@ -193,7 +194,7 @@ server <- function(input, output, session) {
                 numericInput(
                     inputId = "radius", 
                     label = "Radius:",
-                    value = 10
+                    value = 1000
                 )
             )
         }
@@ -215,10 +216,64 @@ server <- function(input, output, session) {
         }
     })
     
+    # --  a query is created based on user inputs to make the Socrata API request
+    myquery <- eventReactive(input$go, {
+        
+        base_query <- paste0(
+            "https://data.cityofnewyork.us/resource/5uac-w243.json?$", # url
+            "select=boro_nm,cmplnt_fr_dt,cmplnt_fr_tm,law_cat_cd,ofns_desc,latitude,longitude&$", # columns
+            sprintf(
+                fmt = "where=cmplnt_fr_dt between '%sT00:00:00.000' and '%sT00:00:00.000' AND ", 
+                input$dates[1], input$dates[2]
+            )
+        )
+        
+        if(input$by == "Borough"){
+            
+            myquery <- paste0(
+                base_query,
+                sprintf(
+                    fmt = "boro_nm='%s' AND law_cat_cd='%s' &$limit=%s ", 
+                    str_to_upper(input$borough), 
+                    str_to_upper(input$offense), 
+                    input$size
+                )
+            )
+            
+        } else {
+            
+            myquery <- paste0(
+                base_query,
+                sprintf(
+                    fmt = "within_circle(geocoded_column, %f, %f, %s) AND law_cat_cd='%s' &$limit=%s ", 
+                    input$lat, input$lng, input$radius, 
+                    str_to_upper(input$offense), 
+                    input$size
+                )
+            )
+        }
+        
+        return(myquery)
+    })
+    
+    # -- make the request to Socrata
+    df_cleaned <- reactive({
+        
+        df <- read.socrata(
+            myquery(),
+            app_token = access_info$app_token,
+            email = access_info$email,
+            password = access_info$password
+        )
+        
+        clean_data(df)
+        
+    })
+    
     # -- time series for plot on the top of the app
     output$timeseries <- renderPlotly(
         
-        df_cleaned %>%
+        df_cleaned() %>%
             count(datetime, name = "n_crimes") %>% 
             plot_ly(
                 x = ~datetime, 
@@ -240,13 +295,14 @@ server <- function(input, output, session) {
     
     # -- reactive values with mean of lat and lng based on data obs
     params <- reactiveValues(
-        lat = mean(df_cleaned$latitude),
-        lng = mean(df_cleaned$longitude)
+        lat = mean(df_cleaned()$latitude),
+        lng = mean(df_cleaned()$longitude)
     )
     
     # -- crime data merged with NTAs Polygons dataframe
     df_merged <- reactive({
-        df_cleaned %>%
+        
+        df_cleaned() %>%
             st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%
             group_by(id) %>%
             mutate(geometry = st_combine(geometry)) %>%
@@ -324,7 +380,7 @@ server <- function(input, output, session) {
                 clearControls()
             
             # for the markers, I use lat, lng coordinates from filtered df.
-            heatmap_data <- df_cleaned %>%
+            heatmap_data <- df_cleaned() %>%
                 select(law_cat_cd, ofns_desc, longitude, latitude)
             
             pal2 <- colorFactor(my_pal, c("Misdemeanor", "Felony", "Violation"))
@@ -350,7 +406,7 @@ server <- function(input, output, session) {
         
         if(input$offense2 == "All"){
             
-            fig <- df_cleaned %>%
+            fig <- df_cleaned() %>%
                 count(dayofweek, name = "n_crimes") %>% 
                 plot_ly(
                     y = ~dayofweek, 
@@ -370,7 +426,7 @@ server <- function(input, output, session) {
             
         } else {
             
-            fig <- df_cleaned %>%
+            fig <- df_cleaned() %>%
                 count(law_cat_cd, dayofweek, name = "n_crimes") %>% 
                 plot_ly(
                     y = ~dayofweek, 
@@ -398,7 +454,7 @@ server <- function(input, output, session) {
         
         if(input$offense2 == "All"){
             
-            fig <- df_cleaned %>%
+            fig <- df_cleaned() %>%
                 count(hour, name = "n_crimes") %>% 
                 plot_ly(
                     x = ~hour, 
@@ -420,7 +476,7 @@ server <- function(input, output, session) {
             
         } else {
             
-            fig <- df_cleaned %>%
+            fig <- df_cleaned() %>%
                 count(law_cat_cd, hour, name = "n_crimes") %>% 
                 plot_ly(
                     x = ~hour, 
