@@ -33,7 +33,8 @@ clean_data <- function(df){
                dayofweek = wday(datetime, label = TRUE, abbr = TRUE),
                hour = hour(datetime)
         ) %>% 
-        select(-cmplnt_fr_dt, -cmplnt_fr_tm)
+        select(-cmplnt_fr_dt, -cmplnt_fr_tm) %>% 
+        filter(datetime >= "2020-12-24")
     
     return(df_cleaned)
 }
@@ -125,15 +126,23 @@ ui <- fluidPage(
                                 inline = TRUE
                             ),
                             
-                            leafletOutput(outputId = "map", width = "80%", height = "600px")
+                            leafletOutput(outputId = "map", height = "600px")
                         ),
                         
                         column(
                             width = 4,
                             
-                            plotlyOutput(outputId = "barplot"),
+                            br(),
                             
-                            plotlyOutput(outputId = "lineplot")
+                            h5("Number of Crimes by Day of the Week"),
+                            
+                            plotlyOutput(outputId = "barplot", height = "250px"),
+                            
+                            hr(),
+                            
+                            h5("Number of Crimes by Hour of the Day"),
+                            
+                            plotlyOutput(outputId = "lineplot", height = "250px")
                         )
                     )
                 ), 
@@ -195,8 +204,7 @@ server <- function(input, output, session) {
                 y = ~n_crimes, 
                 height = 150,
                 type = 'scatter',
-                mode = "lines+markers",
-                marker = list(color = my_pal[1]),
+                mode = "lines",
                 line = list(color = my_pal[1])
             ) %>% 
             layout(
@@ -229,7 +237,7 @@ server <- function(input, output, session) {
         leaflet(data = shapefile) %>% 
             addProviderTiles(provider = "Stamen.Toner") %>%
             setView(
-                zoom = 12, 
+                zoom = 11, 
                 lat = params$lat, 
                 lng = params$lng
             )
@@ -248,55 +256,6 @@ server <- function(input, output, session) {
         
     })
     
-    # heatmap <- reactive({
-    #     
-    #     ntas <- crime_count()
-    #     
-    #     bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = 1)
-    #     
-    #     pal <- colorBin("BuPu", domain = ntas@data$n_crimes, bins = bins)
-    #     
-    #     leafletProxy("map", data = ntas) %>% 
-    #         addPolygons(
-    #             fillColor = ~ pal(n_crimes),
-    #             popup = ~ paste0("<b>", ntaname, ":</b> ", n_crimes, " crime(s)"),
-    #             weight = 2,
-    #             opacity = 1,
-    #             color = "black",
-    #             dashArray = "1",
-    #             fillOpacity = 0.85
-    #         ) %>%
-    #         addLegend(
-    #             pal = pal,
-    #             values = ~n_crimes,
-    #             opacity = 0.85,
-    #             position = "bottomright",
-    #             title = "Number of crimes by NTA"
-    #         )
-    # })
-    # 
-    # circles <- reactive({
-    #     
-    #     heatmap_data <- df_cleaned %>%
-    #         select(law_cat_cd, ofns_desc, longitude, latitude)
-    #     
-    #     pal2 <- colorFactor(my_pal, c("Misdemeanor", "Felony", "Violation"))
-    #     
-    #     leafletProxy("map", data = heatmap_data) %>%
-    #         addCircleMarkers(
-    #             lng = ~longitude,
-    #             lat = ~latitude,
-    #             radius = 10,
-    #             popup = ~ ofns_desc,
-    #             color = ~pal2(law_cat_cd)
-    #         ) %>%
-    #         addLegend(
-    #             pal = pal2,
-    #             values = heatmap_data$law_cat_cd,
-    #             title = "Level of Offense"
-    #         )
-    # })
-    
     # -- replace layer according to user inputs
     observe({
         
@@ -308,7 +267,9 @@ server <- function(input, output, session) {
             
             ntas <- crime_count()
             
-            bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = 1)
+            crimes_std <- var(ntas@data$n_crimes) %>% sqrt() %>% round()
+            
+            bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = crimes_std)
             
             pal <- colorBin("BuPu", domain = ntas@data$n_crimes, bins = bins)
             
@@ -345,7 +306,7 @@ server <- function(input, output, session) {
                 addCircleMarkers(
                     lng = ~longitude,
                     lat = ~latitude,
-                    radius = 10,
+                    radius = 5,
                     popup = ~ ofns_desc,
                     color = ~pal2(law_cat_cd)
                 ) %>%
@@ -356,6 +317,48 @@ server <- function(input, output, session) {
                 )
         }
     })
+    
+    output$barplot <- renderPlotly(
+        
+        df_cleaned %>%
+            count(dayofweek, name = "n_crimes") %>% 
+            plot_ly(
+                y = ~dayofweek, 
+                x = ~n_crimes, 
+                height = 250,
+                type = 'bar',
+                marker = list(color = my_pal[1])
+            ) %>% 
+            layout(
+                yaxis = list(title = 'Day of the Week'),
+                xaxis = list(title = 'No. of Crimes'),
+                margin = list(l = 10, r = 10, t = 10, b = 10),
+                plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                paper_bgcolor = "rgba(0, 0, 0, 0)",
+                font = list(color = '#FFFFFF', size = 10)
+            )
+    )
+    
+    output$lineplot <- renderPlotly(
+        
+        df_cleaned %>%
+            count(hour, name = "n_crimes") %>% 
+            plot_ly(
+                x = ~hour, 
+                y = ~n_crimes, 
+                height = 250,
+                type = 'bar',
+                marker = list(color = my_pal[1])
+            ) %>% 
+            layout(
+                yaxis = list(title = 'No. of Crimes'),
+                xaxis = list(title = 'Hour'),
+                margin = list(l = 10, r = 10, t = 10, b = 10),
+                plot_bgcolor  = "rgba(0, 0, 0, 0)",
+                paper_bgcolor = "rgba(0, 0, 0, 0)",
+                font = list(color = '#FFFFFF', size = 10)
+            )
+    )
     
 }
 
