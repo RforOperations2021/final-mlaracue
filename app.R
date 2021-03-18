@@ -1,5 +1,6 @@
 library("shiny")
 library("shinythemes")
+library("DT")
 library("plotly")
 library("leaflet")
 library("leaflet.extras")
@@ -57,6 +58,8 @@ ui <- fluidPage(
     # themeSelector(),
     theme = shinytheme("darkly"),
     
+    tags$head(tags$style("div.dataTables_scrollHead span {color: black;}")),
+    
     sidebarLayout(
         
         sidebarPanel(
@@ -66,21 +69,18 @@ ui <- fluidPage(
             dateRangeInput(
                 inputId = "dates", 
                 label = "Select date range:",
-                start = "2020-12-01",
+                start = "2020-12-31",
                 end = "2020-12-31",
                 min = "2019-01-01",
                 max = "2020-12-31"
             ),
             
-            radioButtons(
-                inputId = "by", 
-                label = "Search by:", 
-                choices = c("Borough", "Location"), 
-                selected = "Borough", 
-                inline = TRUE
+            selectInput(
+                inputId = "borough",
+                label = "Select a Borough:",
+                choices = c("Manhattan", "Brooklyn", "Bronx", "Queens", "Staten Island"),
+                multiple = FALSE
             ),
-            
-            uiOutput("byoptions"),
             
             selectInput(
                 inputId = "offense",
@@ -90,7 +90,6 @@ ui <- fluidPage(
                 multiple = FALSE
             ),
             
-            # TODO: control sample size or send a message to user warning processing times
             numericInput(
                 inputId = "size",
                 label = "Sample size:",
@@ -98,11 +97,6 @@ ui <- fluidPage(
                 min = 0,
                 max = 10000,
                 step = 100
-            ),
-            
-            actionButton(
-                inputId = "go",
-                label = "Retrieve Data"
             )
         ),
         
@@ -154,53 +148,13 @@ ui <- fluidPage(
                     )
                 ), 
                 
-                tabPanel(title = "Data", tableOutput("table"))
+                tabPanel(title = "Data", DTOutput("table"))
             )
         )
     )
 )
 
 server <- function(input, output, session) {
-    
-    # --the ui options change depending on whether user wants to filter data based on boroughs
-    # or a point location and a radius
-    output$byoptions <- renderUI({
-        
-        if(input$by == "Borough"){
-            
-            selectInput(
-                inputId = "borough",
-                label = "Select a Borough:",
-                choices = c("Manhattan", "Brooklyn", "Bronx", "Queens", "Staten Island"),
-                multiple = TRUE,
-                selectize = TRUE
-            )
-            
-        } else {
-            
-            column(
-                width = 12,
-                # TODO: control lat and lng so it's not outside NYC
-                numericInput(
-                    inputId = "lat", 
-                    label = "Latitude:",
-                    value = 40.785091
-                ),
-                
-                numericInput(
-                    inputId = "lon", 
-                    label = "Longitude:",
-                    value = -73.968285
-                ),
-                
-                numericInput(
-                    inputId = "radius", 
-                    label = "Radius:",
-                    value = 1000
-                )
-            )
-        }
-    })
     
     # -- this filter is only shown when no specific level of offense is selected
     output$showopts <- renderUI({
@@ -218,40 +172,54 @@ server <- function(input, output, session) {
         }
     })
     
+    # --show a modal when the sample size is greater than 500
+    observe({
+        
+        if(input$size > 1000) {
+            
+            showModal(modalDialog(
+                title = "Warning!", 
+                "Sample size might be too large. It would take some time to retrieve the data. Be patient!"
+            ))
+            
+        }
+    })
+    
+    # -- avoid sample size to be greater than 10,000
+    observe({
+        req(input$size)
+        
+        if(input$size > 10000){
+            
+            updateNumericInput(
+                session = session,
+                inputId = "input",
+                value = 10000
+            )
+            
+            showNotification(
+                ui = "The limit of sample size is 10,000", 
+                type = "warning"
+            )
+        }
+    })
+    
     # --  a query is created based on user inputs to make the Socrata API request
-    myquery <- eventReactive(input$go, {
+    myquery <- reactive({
         
         base_query <- paste0(
             "https://data.cityofnewyork.us/resource/5uac-w243.json?$", # url
             "select=boro_nm,cmplnt_fr_dt,cmplnt_fr_tm,law_cat_cd,ofns_desc,latitude,longitude&$", # columns
             sprintf(
-                fmt = "where=cmplnt_fr_dt between '%sT00:00:00.000' and '%sT00:00:00.000' AND ", 
-                input$dates[1], input$dates[2]
+                fmt = "where=cmplnt_fr_dt between '%sT00:00:00.000' and '%sT00:00:00.000' AND boro_nm='%s'", 
+                input$dates[1], input$dates[2], str_to_upper(input$borough)
             )
         )
-        
-        if(input$by == "Borough"){
-            
-            myquery <- paste0(
-                base_query,
-                sprintf(fmt = "boro_nm='%s'", str_to_upper(input$borough))
-            )
-            
-        } else {
-            
-            myquery <- paste0(
-                base_query,
-                sprintf(
-                    fmt = "within_circle(geocoded_column, %f, %f, %s)", 
-                    input$lat, input$lng, input$radius
-                )
-            )
-        }
         
         if(input$offense != "All"){
             
             myquery <- paste0(
-                myquery,
+                base_query,
                 sprintf(
                     fmt = " AND law_cat_cd='%s' &$limit=%s", 
                     str_to_upper(input$offense), 
@@ -262,19 +230,17 @@ server <- function(input, output, session) {
         } else {
             
             myquery <- paste0(
-                myquery,
+                base_query,
                 sprintf(fmt = "&$limit=%s", input$size)
             )
         }
-        
-        return(myquery)
     })
     
     # -- make the request to Socrata
     df_cleaned <- reactive({
-        
+        # TODO: control when query retrieves an empty data
         df <- read.socrata(
-            myquery(),
+            url = myquery(),
             app_token = access_info$app_token,
             email = access_info$email,
             password = access_info$password
@@ -307,12 +273,6 @@ server <- function(input, output, session) {
             )
     )
     
-    # -- reactive values with mean of lat and lng based on data obs
-    params <- reactiveValues(
-        lat = mean(df_cleaned()$latitude),
-        lng = mean(df_cleaned()$longitude)
-    )
-    
     # -- crime data merged with NTAs Polygons dataframe
     df_merged <- reactive({
         
@@ -331,8 +291,8 @@ server <- function(input, output, session) {
             addProviderTiles(provider = "Stamen.Toner") %>%
             setView(
                 zoom = 11, 
-                lat = params$lat, 
-                lng = params$lng
+                lat = mean(df_cleaned()$latitude), 
+                lng = mean(df_cleaned()$longitude)
             )
         
     })
@@ -363,6 +323,10 @@ server <- function(input, output, session) {
             ntas <- crime_count()
             
             crimes_std <- var(ntas@data$n_crimes) %>% sqrt() %>% round()
+            
+            if(crimes_std == 0){
+                crimes_std = crimes_std + 1
+            }
             
             bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = crimes_std)
             
@@ -514,6 +478,20 @@ server <- function(input, output, session) {
                 )
         }
         
+    )
+    
+    output$table <- renderDT(
+        datatable(
+            data = df_cleaned(),
+            caption = "NYPD queried data",
+            options = list(pageLength = 50),
+            rownames = FALSE
+        ) %>% 
+            formatRound(columns = c(4:5), digits = 2) %>% 
+            formatStyle(columns = colnames(df_cleaned()),
+                        backgroundColor = '#282828', 
+                        color = "white"
+                        )
     )
     
 }
