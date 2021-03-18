@@ -116,6 +116,15 @@ ui <- fluidPage(
                         
                         column(
                             width = 8,
+                            
+                            radioButtons(
+                                inputId = "type", 
+                                label = "Type of map:", 
+                                choices = c("Heatmap", "CircleMarkers"), 
+                                selected = "Heatmap", 
+                                inline = TRUE
+                            ),
+                            
                             leafletOutput(outputId = "map", width = "80%", height = "600px")
                         ),
                         
@@ -239,8 +248,8 @@ server <- function(input, output, session) {
         
     })
     
-    # -- replace layer according to user inputs
-    observe({
+    heatmap <- reactive({
+        
         ntas <- crime_count()
         
         bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = 1)
@@ -248,6 +257,8 @@ server <- function(input, output, session) {
         pal <- colorBin("BuPu", domain = ntas@data$n_crimes, bins = bins)
         
         leafletProxy("map", data = ntas) %>% 
+            clearShapes() %>%
+            clearMarkers() %>%  
             addPolygons(
                 fillColor = ~ pal(n_crimes),
                 popup = ~ paste0("<b>", ntaname, ":</b> ", n_crimes, " crime(s)"),
@@ -257,6 +268,7 @@ server <- function(input, output, session) {
                 dashArray = "1",
                 fillOpacity = 0.85
             ) %>%
+            clearControls() %>% 
             addLegend(
                 pal = pal,
                 values = ~n_crimes,
@@ -265,6 +277,45 @@ server <- function(input, output, session) {
                 title = "Number of crimes by NTA"
             )
     })
+    
+    circles <- reactive({
+        
+        heatmap_data <- df_cleaned %>%
+            select(law_cat_cd, ofns_desc, longitude, latitude)
+        
+        pal2 <- colorFactor(my_pal, c("Misdemeanor", "Felony", "Violation"))
+        
+        leafletProxy("map", data = heatmap_data) %>%
+            clearShapes() %>%
+            clearMarkers() %>% 
+            addCircleMarkers(
+                lng = ~longitude,
+                lat = ~latitude,
+                radius = 10,
+                popup = ~ ofns_desc,
+                color = ~pal2(law_cat_cd)
+            ) %>%
+            clearControls() %>% 
+            addLegend(
+                pal = pal2,
+                values = heatmap_data$law_cat_cd,
+                title = "Level of Offense"
+            )
+    })
+    
+    # -- replace layer according to user inputs
+    observe({
+        
+        if(input$type == "Heatmap"){
+            
+            heatmap()
+            
+        } else if(input$type == "CircleMarkers"){
+
+            circles()
+        }
+    })
+    
 }
 
 # run the application
