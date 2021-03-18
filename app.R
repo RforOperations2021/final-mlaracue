@@ -14,26 +14,28 @@ library("yaml")
 library("RSocrata")
 
 # -- data loading
-# shapefile <- readOGR('https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&format=GeoJSON')
 access_info <- yaml.load_file(input = "credentials.yaml")
 
-load("dummy-data.Rdata")
+# shapefile <- readOGR('https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&format=GeoJSON')
+# shapefile is loaded as an .RData object to enhance app response time
+load("shapefile.Rdata")
 
 ntas_data <- shapefile@data # to preserve original data and use it for merging
 
 # my_pal <- c('#4cc9f0', "#3a0ca3", "#f72585")
 my_pal <- rev(c('#007f5f', "#aacc00", "#ffff3f"))
 
-clean_data <- function(df){
+clean_data <- function(df) {
     df_cleaned <- df %>% 
         mutate_at(.vars = c("boro_nm", "law_cat_cd", "ofns_desc"),
                   .funs = str_to_title) %>% 
         mutate_at(.vars = c("latitude", "longitude"),
                   .funs = as.numeric) %>% 
         mutate(id = 1:nrow(.),
-               cmplnt_fr_dt = str_replace_all(cmplnt_fr_dt, 
-                                              pattern = "T00:00:00.000",
-                                              replacement = ""),
+               cmplnt_fr_dt = str_replace_all(
+                   cmplnt_fr_dt, 
+                   pattern = "T00:00:00.000",
+                   replacement = ""),
                datetime = paste(cmplnt_fr_dt, " ", cmplnt_fr_tm),
                datetime = as_datetime(datetime),
                dayofweek = wday(datetime, label = TRUE, abbr = TRUE),
@@ -64,7 +66,7 @@ ui <- fluidPage(
             dateRangeInput(
                 inputId = "dates", 
                 label = "Select date range:",
-                start = "2019-01-01",
+                start = "2020-12-01",
                 end = "2020-12-31",
                 min = "2019-01-01",
                 max = "2020-12-31"
@@ -232,9 +234,26 @@ server <- function(input, output, session) {
             
             myquery <- paste0(
                 base_query,
+                sprintf(fmt = "boro_nm='%s'", str_to_upper(input$borough))
+            )
+            
+        } else {
+            
+            myquery <- paste0(
+                base_query,
                 sprintf(
-                    fmt = "boro_nm='%s' AND law_cat_cd='%s' &$limit=%s ", 
-                    str_to_upper(input$borough), 
+                    fmt = "within_circle(geocoded_column, %f, %f, %s)", 
+                    input$lat, input$lng, input$radius
+                )
+            )
+        }
+        
+        if(input$offense != "All"){
+            
+            myquery <- paste0(
+                myquery,
+                sprintf(
+                    fmt = " AND law_cat_cd='%s' &$limit=%s", 
                     str_to_upper(input$offense), 
                     input$size
                 )
@@ -243,13 +262,8 @@ server <- function(input, output, session) {
         } else {
             
             myquery <- paste0(
-                base_query,
-                sprintf(
-                    fmt = "within_circle(geocoded_column, %f, %f, %s) AND law_cat_cd='%s' &$limit=%s ", 
-                    input$lat, input$lng, input$radius, 
-                    str_to_upper(input$offense), 
-                    input$size
-                )
+                myquery,
+                sprintf(fmt = "&$limit=%s", input$size)
             )
         }
         
@@ -447,7 +461,7 @@ server <- function(input, output, session) {
                     barmode = 'stack'
                 )
         }
-
+        
     )
     
     output$lineplot <- renderPlotly(
