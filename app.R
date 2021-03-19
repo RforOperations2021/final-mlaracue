@@ -46,6 +46,8 @@ clean_data <- function(df) {
     return(df_cleaned)
 }
 
+max_size <- 10000
+
 # df_cleaned <- clean_data(df) %>% filter(datetime >= "2020-12-24")
 
 ui <- fluidPage(
@@ -69,7 +71,7 @@ ui <- fluidPage(
                 label = "Select date range:",
                 start = "2020-12-31",
                 end = "2020-12-31",
-                min = "2019-01-01",
+                min = "2020-07-01",
                 max = "2020-12-31"
             ),
             
@@ -93,7 +95,7 @@ ui <- fluidPage(
                 label = "Sample size:",
                 value = 100,
                 min = 0,
-                max = 10000,
+                max = max_size,
                 step = 100
             )
         ),
@@ -187,12 +189,12 @@ server <- function(input, output, session) {
     observe({
         req(input$size)
         
-        if(input$size > 10000){
+        if(input$size > max_size){
             
             updateNumericInput(
                 session = session,
                 inputId = "input",
-                value = 10000
+                value = max_size
             )
             
             showNotification(
@@ -236,7 +238,7 @@ server <- function(input, output, session) {
     
     # -- make the request to Socrata
     df_cleaned <- reactive({
-        # TODO: control when query retrieves an empty data
+        
         df <- read.socrata(
             url = myquery(),
             app_token = access_info$app_token,
@@ -246,6 +248,20 @@ server <- function(input, output, session) {
         
         clean_data(df)
         
+    })
+    
+    # -- let know user if API retrieves empty data
+    observe({
+        
+        req(df_cleaned())
+        
+        if(nrow(df_cleaned()) == 0){
+            
+            showModal(modalDialog(
+                title = "Error!", 
+                "There is no data with the specified filters. Please try again."
+            ))
+        }
     })
     
     # -- time series for plot on the top of the app
@@ -322,13 +338,15 @@ server <- function(input, output, session) {
             
             ntas <- crime_count()
             
-            crimes_std <- var(ntas@data$n_crimes) %>% sqrt() %>% round()
+            n_max <- max(ntas@data$n_crimes)
             
-            if(crimes_std == 0){
-                crimes_std = crimes_std + 1
+            by = tail(numbers::divisors(n_max), n = 2)[1]
+            
+            bins <- seq(from = 0, to = n_max, by = by)
+            
+            if(length(bins) > 10){
+                bins <- seq(from = 0, to = n_max, by = by + 5)
             }
-            
-            bins <- seq(from = 0, to = max(ntas@data$n_crimes), by = crimes_std)
             
             pal <- colorBin("viridis", domain = ntas@data$n_crimes, bins = bins)
             
