@@ -4,6 +4,7 @@ library("DT")
 library("plotly")
 library("leaflet")
 library("leaflet.extras")
+library("R.utils")
 
 library("sf")
 library("tidyr")
@@ -78,7 +79,7 @@ myquery <- function(dates, borough, offense, size = NULL) ({
 
 
 
-max_size <- 10000
+max_size <- 100
 
 # df_cleaned <- clean_data(df) %>% filter(datetime >= "2020-12-24")
 
@@ -100,7 +101,7 @@ ui <- fluidPage(
             
             dateRangeInput(
                 inputId = "dates", 
-                label = "Select date range:",
+                label = "Date range:",
                 start = "2020-12-31",
                 end = "2020-12-31",
                 min = "2020-07-01",
@@ -109,7 +110,7 @@ ui <- fluidPage(
             
             selectInput(
                 inputId = "borough",
-                label = "Select a Borough:",
+                label = "Borough:",
                 choices = c("Manhattan", "Brooklyn", "Bronx", "Queens", "Staten Island"),
                 multiple = FALSE
             ),
@@ -243,13 +244,14 @@ server <- function(input, output, session) {
         
         if (is.null(df())) {
             
-            numericInput(
+            sliderInput(
                 inputId = "size",
                 label = "Sample size:",
-                value = 100,
-                min = 0,
+                value = 1,
+                min = 1,
                 max = max_size,
-                step = 100
+                step = 1,
+                post = "K"
             )
         }
         
@@ -262,7 +264,7 @@ server <- function(input, output, session) {
             
             showModal(modalDialog(
                 title = "Attention!", 
-                "The data you're trying to retrieve is large. The first last 100 will be selected.
+                "The data you're trying to retrieve is too large. The first 100 will be selected.
                 You can select other sample size."
             ))
         }
@@ -273,7 +275,7 @@ server <- function(input, output, session) {
         
         if(!is.null(input$size)) {
             
-            if(input$size > 1000){
+            if(input$size * 100 > 1000){
                 
                 showModal(modalDialog(
                     title = "Warning!", 
@@ -281,6 +283,7 @@ server <- function(input, output, session) {
                     It would take some time to retrieve the data. Be patient!"
                 ))
             }
+            
         }
     })
     
@@ -293,7 +296,7 @@ server <- function(input, output, session) {
             
             if(input$size > max_size){
                 
-                updateNumericInput(
+                updateSliderInput(
                     session = session,
                     inputId = "size",
                     value = max_size
@@ -319,7 +322,7 @@ server <- function(input, output, session) {
             
             clean_data(
                 read.socrata(
-                    url = myquery(input$dates, input$borough, input$offense, input$size),
+                    url = myquery(input$dates, input$borough, input$offense, (input$size * 100)),
                     app_token = access_info$app_token,
                     email = access_info$email,
                     password = access_info$password
@@ -418,17 +421,9 @@ server <- function(input, output, session) {
             
             n_max <- max(ntas@data$n_crimes)
             
-            by_opts <- numbers::divisors(n_max)
+            n_max <- if(n_max > 100) round(n_max, digits = -2) + 50 else round(n_max, digits = -1) + 5
             
-            if(length(by_opts) > 10) {
-                by = by_opts[10]
-            } else if(length(by_opts) > 4) {
-                by = by_opts[4]
-            } else {
-                by = by_opts[2]
-            }
-            
-            bins <- seq(from = 0, to = n_max, by = by)
+            bins <- seq(from = 0, to = n_max, by = n_max / 5)
             
             pal <- colorBin("viridis", domain = ntas@data$n_crimes, bins = bins)
             
