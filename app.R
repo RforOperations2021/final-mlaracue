@@ -172,6 +172,30 @@ server <- function(input, output, session) {
         }
     })
     
+    # --the maximum range available (to avoid large requests) is one month
+    observe({
+        req(input$dates)
+        
+        start <- as_date(input$dates[1])
+        end <- as_date(input$dates[2])
+        
+        if(month(end) != month(start) & (end - start) > days_in_month(month(start))){
+            
+            new_end <- start + days(30)
+                
+            updateDateRangeInput(
+                session = session,
+                inputId = "dates",
+                end = new_end
+            )
+            
+            showNotification(
+                ui = "The maximum number of days you can filter is 30", 
+                type = "warning"
+            )
+        }
+    })
+    
     # --show a modal when the sample size is greater than 500
     observe({
         
@@ -179,7 +203,7 @@ server <- function(input, output, session) {
             
             showModal(modalDialog(
                 title = "Warning!", 
-                "Sample size might be too large. It would take some time to retrieve the data. Be patient!"
+                "Sample size might be too large. It would take some time to retrieve the data.\nBe patient!"
             ))
             
         }
@@ -348,7 +372,7 @@ server <- function(input, output, session) {
             } else if(length(by_opts) >= 4) {
                 by = by_opts[4]
             } else {
-                by = by_opts[2]
+                by = by_opts[3]
             }
             
             bins <- seq(from = 0, to = n_max, by = by)
