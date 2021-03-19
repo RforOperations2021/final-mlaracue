@@ -21,8 +21,6 @@ access_info <- yaml.load_file(input = "credentials.yaml")
 # shapefile is loaded as an .RData object to enhance app response time
 load("shapefile.Rdata")
 
-ntas_data <- shapefile@data # to preserve original data and use it for merging
-
 # my_pal <- c('#4cc9f0', "#3a0ca3", "#f72585")
 my_pal <- rev(c('#007f5f', "#aacc00", "#ffff3f"))
 
@@ -287,7 +285,7 @@ server <- function(input, output, session) {
     # -- basic map
     output$map <- renderLeaflet({
         
-        leaflet(data = shapefile) %>% 
+        leaflet() %>% 
             addProviderTiles(provider = "Stamen.Toner") %>%
             setView(
                 zoom = 11, 
@@ -304,9 +302,11 @@ server <- function(input, output, session) {
             st_set_geometry(NULL) %>%
             count(ntacode, sort = TRUE, name = "n_crimes")
         
-        shapefile@data <- merge(ntas_data, crimes_count, sort = FALSE, by = "ntacode")
+        ntas_data <- shapefile[shapefile$ntacode %in% crimes_count$ntacode, ]
         
-        return(shapefile)
+        ntas_data@data <- merge(shapefile@data, crimes_count, sort = FALSE, by = "ntacode")
+        
+        return(ntas_data)
         
     })
     
