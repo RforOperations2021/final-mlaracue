@@ -46,6 +46,38 @@ clean_data <- function(df) {
     return(df_cleaned)
 }
 
+# -- function that creates a query based on user inputs
+myquery <- function(dates, borough, offense, size = NULL) ({
+    
+    query <- paste0(
+        "https://data.cityofnewyork.us/resource/5uac-w243.json?$", # url
+        "select=boro_nm,cmplnt_fr_dt,cmplnt_fr_tm,law_cat_cd,ofns_desc,latitude,longitude&$", # columns
+        sprintf(
+            fmt = "where=cmplnt_fr_dt between '%sT00:00:00.000' and '%sT00:00:00.000' AND boro_nm='%s'", 
+            dates[1], dates[2], str_to_upper(borough)
+        )
+    )
+    
+    if(offense != "All"){
+        
+        query <- paste0(
+            query,
+            sprintf(fmt = " AND law_cat_cd='%s'", str_to_upper(offense))
+        )
+    } 
+    
+    if(!is.null(size)){
+        query <- paste0(
+            query,
+            sprintf(fmt = "&$limit=%s", size)
+        )
+    }
+    
+    return(query)
+})
+
+
+
 max_size <- 10000
 
 # df_cleaned <- clean_data(df) %>% filter(datetime >= "2020-12-24")
@@ -90,14 +122,7 @@ ui <- fluidPage(
                 multiple = FALSE
             ),
             
-            numericInput(
-                inputId = "size",
-                label = "Sample size:",
-                value = 100,
-                min = 0,
-                max = max_size,
-                step = 100
-            )
+            uiOutput(outputId = "doSampling")
         ),
         
         mainPanel(
@@ -182,7 +207,7 @@ server <- function(input, output, session) {
         if(month(end) != month(start) & (end - start) > days_in_month(month(start))){
             
             new_end <- start + days(30)
-                
+            
             updateDateRangeInput(
                 session = session,
                 inputId = "dates",
@@ -196,82 +221,111 @@ server <- function(input, output, session) {
         }
     })
     
+    # -- make the request to Socrata
+    df <- reactive({
+        
+        withTimeout(
+            expr = read.socrata(
+                url = myquery(input$dates, input$borough, input$offense),
+                app_token = access_info$app_token,
+                email = access_info$email,
+                password = access_info$password
+            ), 
+            # TODO: decide timeout
+            timeout = 1, 
+            onTimeout = "silent"
+        )
+        
+    })
+    
+    # -- if not possible to retrieve all data (returns an error), activate sampling
+    output$doSampling <- renderUI({
+        
+        if (is.null(df())) {
+            
+            numericInput(
+                inputId = "size",
+                label = "Sample size:",
+                value = 100,
+                min = 0,
+                max = max_size,
+                step = 100
+            )
+        }
+        
+    })
+    
+    # -- let know user that sample size option was activated
+    observe({
+        
+        if (is.null(df())) {
+            
+            showModal(modalDialog(
+                title = "Attention!", 
+                "The data you're trying to retrieve is large. The first last 100 will be selected.
+                You can select other sample size."
+            ))
+        }
+    })
+    
     # --show a modal when the sample size is greater than 500
     observe({
         
-        if(input$size > 1000) {
+        if(!is.null(input$size)) {
             
-            showModal(modalDialog(
-                title = "Warning!", 
-                "Sample size might be too large. It would take some time to retrieve the data.\nBe patient!"
-            ))
-            
+            if(input$size > 1000){
+                
+                showModal(modalDialog(
+                    title = "Warning!", 
+                    "Sample size might be too large.
+                    It would take some time to retrieve the data. Be patient!"
+                ))
+            }
         }
     })
     
-    # -- avoid sample size to be greater than 10,000
+    # -- avoid sample size to be greater than max sample size
     observe({
+        
         req(input$size)
         
-        if(input$size > max_size){
+        if(!is.null(input$size)){
             
-            updateNumericInput(
-                session = session,
-                inputId = "input",
-                value = max_size
-            )
-            
-            showNotification(
-                ui = "The limit of sample size is 10,000", 
-                type = "warning"
-            )
+            if(input$size > max_size){
+                
+                updateNumericInput(
+                    session = session,
+                    inputId = "size",
+                    value = max_size
+                )
+                
+                showNotification(
+                    ui = "The limit of sample size is 10,000", 
+                    type = "warning"
+                )
+            }
         }
     })
     
-    # --  a query is created based on user inputs to make the Socrata API request
-    myquery <- reactive({
+    df_cleaned <- reactive({
         
-        base_query <- paste0(
-            "https://data.cityofnewyork.us/resource/5uac-w243.json?$", # url
-            "select=boro_nm,cmplnt_fr_dt,cmplnt_fr_tm,law_cat_cd,ofns_desc,latitude,longitude&$", # columns
-            sprintf(
-                fmt = "where=cmplnt_fr_dt between '%sT00:00:00.000' and '%sT00:00:00.000' AND boro_nm='%s'", 
-                input$dates[1], input$dates[2], str_to_upper(input$borough)
-            )
-        )
-        
-        if(input$offense != "All"){
+        if(!is.null(df())){
             
-            myquery <- paste0(
-                base_query,
-                sprintf(
-                    fmt = " AND law_cat_cd='%s' &$limit=%s", 
-                    str_to_upper(input$offense), 
-                    input$size
-                )
-            )
+            clean_data(df())
             
         } else {
             
-            myquery <- paste0(
-                base_query,
-                sprintf(fmt = "&$limit=%s", input$size)
+            req(input$size)
+            
+            clean_data(
+                read.socrata(
+                    url = myquery(input$dates, input$borough, input$offense, input$size),
+                    app_token = access_info$app_token,
+                    email = access_info$email,
+                    password = access_info$password
+                )
             )
         }
-    })
-    
-    # -- make the request to Socrata
-    df_cleaned <- reactive({
-        
-        df <- read.socrata(
-            url = myquery(),
-            app_token = access_info$app_token,
-            email = access_info$email,
-            password = access_info$password
-        )
-        
-        clean_data(df)
-        
     })
     
     # -- let know user if API retrieves empty data
@@ -366,13 +420,10 @@ server <- function(input, output, session) {
             
             by_opts <- numbers::divisors(n_max)
             
-            if(length(by_opts) == 2){
-                # by = tail(, n = 2)[1]
-                by = by_opts[2]
-            } else if(length(by_opts) >= 4) {
+            if(length(by_opts) > 4) {
                 by = by_opts[4]
             } else {
-                by = by_opts[3]
+                by = by_opts[2]
             }
             
             bins <- seq(from = 0, to = n_max, by = by)
@@ -538,7 +589,7 @@ server <- function(input, output, session) {
             formatStyle(columns = colnames(df_cleaned()),
                         backgroundColor = '#282828', 
                         color = "white"
-                        )
+            )
     )
     
 }
