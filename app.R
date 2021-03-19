@@ -340,13 +340,18 @@ server <- function(input, output, session) {
             
             n_max <- max(ntas@data$n_crimes)
             
-            by = tail(numbers::divisors(n_max), n = 2)[1]
+            by_opts <- numbers::divisors(n_max)
+            
+            if(length(by_opts) == 2){
+                # by = tail(, n = 2)[1]
+                by = by_opts[2]
+            } else if(length(by_opts) >= 4) {
+                by = by_opts[4]
+            } else {
+                by = by_opts[2]
+            }
             
             bins <- seq(from = 0, to = n_max, by = by)
-            
-            if(length(bins) > 10){
-                bins <- seq(from = 0, to = n_max, by = by + 5)
-            }
             
             pal <- colorBin("viridis", domain = ntas@data$n_crimes, bins = bins)
             
