@@ -420,7 +420,9 @@ server <- function(input, output, session) {
             
             by_opts <- numbers::divisors(n_max)
             
-            if(length(by_opts) > 4) {
+            if(length(by_opts) > 10) {
+                by = by_opts[10]
+            } else if(length(by_opts) > 4) {
                 by = by_opts[4]
             } else {
                 by = by_opts[2]
