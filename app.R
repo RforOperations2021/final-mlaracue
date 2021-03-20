@@ -18,6 +18,8 @@ library("RSocrata")
 # -- data loading
 access_info <- yaml.load_file(input = "credentials.yaml")
 
+info <- readLines(con = "about.txt")
+
 # shapefile <- readOGR('https://data.cityofnewyork.us/api/geospatial/cpf4-rkhq?method=export&format=GeoJSON')
 # shapefile is loaded as an .RData object to enhance app response time
 load("shapefile.Rdata")
@@ -85,8 +87,9 @@ max_size <- 100
 
 ui <- fluidPage(
     
-    titlePanel("NYPD Explorer"),
-    title = "NYPD Explorer",
+    titlePanel(title = "NYPD Explorer"),
+    
+    h4("Analysis of last six months of crime data in NYC"),
     
     # themeSelector(),
     theme = shinytheme("darkly"),
@@ -123,7 +126,12 @@ ui <- fluidPage(
                 multiple = FALSE
             ),
             
-            uiOutput(outputId = "doSampling")
+            uiOutput(outputId = "doSampling"),
+            
+            downloadButton(
+                outputId = 'download', 
+                label = "Download data"
+            )
         ),
         
         mainPanel(
@@ -137,6 +145,10 @@ ui <- fluidPage(
                     title = "Plots",
                     
                     plotlyOutput(outputId = "timeseries", height = "40%"),
+                    
+                    textOutput(outputId = "n_obs", inline = TRUE),
+                    
+                    hr(),
                     
                     fluidRow(
                         
@@ -174,7 +186,9 @@ ui <- fluidPage(
                     )
                 ), 
                 
-                tabPanel(title = "Data", DTOutput("table"))
+                tabPanel(title = "Data", DTOutput("table")),
+                
+                tabPanel(title = "About", HTML(text = info))
             )
         )
     )
@@ -222,7 +236,7 @@ server <- function(input, output, session) {
         }
     })
     
-    # -- make the request to Socrata
+    # -- make the request to Socrata. Return null if time execution is greater than 1 second
     df <- reactive({
         
         withTimeout(
@@ -232,7 +246,6 @@ server <- function(input, output, session) {
                 email = access_info$email,
                 password = access_info$password
             ), 
-            # TODO: decide timeout
             timeout = 1, 
             onTimeout = "silent"
         )
@@ -250,7 +263,7 @@ server <- function(input, output, session) {
                 value = 1,
                 min = 1,
                 max = max_size,
-                step = 1,
+                step = 5,
                 post = "K"
             )
         }
@@ -288,28 +301,29 @@ server <- function(input, output, session) {
     })
     
     # -- avoid sample size to be greater than max sample size
-    observe({
-        
-        req(input$size)
-        
-        if(!is.null(input$size)){
-            
-            if(input$size > max_size){
-                
-                updateSliderInput(
-                    session = session,
-                    inputId = "size",
-                    value = max_size
-                )
-                
-                showNotification(
-                    ui = "The limit of sample size is 10,000", 
-                    type = "warning"
-                )
-            }
-        }
-    })
+    # observe({
+    #     
+    #     req(input$size)
+    #     
+    #     if(!is.null(input$size)){
+    #         
+    #         if(input$size > max_size){
+    #             
+    #             updateSliderInput(
+    #                 session = session,
+    #                 inputId = "size",
+    #                 value = max_size
+    #             )
+    #             
+    #             showNotification(
+    #                 ui = "The limit of sample size is 10,000", 
+    #                 type = "warning"
+    #             )
+    #         }
+    #     }
+    # })
     
+    # if the time execution is greater than 1 second (df is null), tries with a sample size
     df_cleaned <- reactive({
         
         if(!is.null(df())){
@@ -329,6 +343,12 @@ server <- function(input, output, session) {
                 )
             )
         }
+    })
+    
+    # -- display number of obs
+    output$n_obs <- renderText({
+        
+        paste0("Total Number of Observations: ", scales::comma(nrow(df_cleaned())))
     })
     
     # -- let know user if API retrieves empty data
@@ -386,6 +406,7 @@ server <- function(input, output, session) {
             addProviderTiles(provider = "Stamen.Toner") %>%
             setView(
                 zoom = 11, 
+                # change lat and lon based on Borough
                 lat = mean(df_cleaned()$latitude), 
                 lng = mean(df_cleaned()$longitude)
             )
@@ -418,6 +439,10 @@ server <- function(input, output, session) {
                 clearControls()
             
             ntas <- crime_count()
+            
+            # -- create the number of ranges programmatically. 
+            # This ensures that the number of levels is not too large (when number of crimes is high)
+            # not too short either (when number of crimes is less than 20 or so)
             
             n_max <- max(ntas@data$n_crimes)
             
@@ -475,6 +500,7 @@ server <- function(input, output, session) {
         }
     })
     
+    # -- barplot with the total number of crimes by day of the week
     output$barplot <- renderPlotly(
         
         if(input$offense2 == "All"){
@@ -523,6 +549,7 @@ server <- function(input, output, session) {
         
     )
     
+    # -- lineplot with the total number of crimes by hour of the day
     output$lineplot <- renderPlotly(
         
         if(input$offense2 == "All"){
@@ -575,18 +602,41 @@ server <- function(input, output, session) {
         
     )
     
-    output$table <- renderDT(
+    # -- data table in second tab
+    output$table <- renderDT({
+        
+        data <- df_cleaned() %>% select(-id)
+        
         datatable(
-            data = df_cleaned(),
+            data = data,
             caption = "NYPD queried data",
-            options = list(pageLength = 50),
+            options = list(
+                initComplete = JS(
+                    # to change the color of the text in column names
+                    "function(settings, json) {",
+                    "$(this.api().table().header()).css({'background-color': '#282828', 'color': '#fff'});",
+                    "}"),
+                pageLength = 50
+            ),
             rownames = FALSE
         ) %>% 
             formatRound(columns = c(4:5), digits = 2) %>% 
-            formatStyle(columns = colnames(df_cleaned()),
+            # to change background color and font color of text rows
+            formatStyle(columns = colnames(data),
                         backgroundColor = '#282828', 
                         color = "white"
             )
+    })
+    
+    # download data. In file name the date range is indicated
+    output$download <- downloadHandler(
+        
+        filename = function() {
+            paste0('NYPD-crime-data', input$dates[1], 'to', input$dates[2], '.csv')
+        },
+        content = function(file){
+            write.csv(df_cleaned() %>% select(-id), file, row.names = FALSE)
+        }
     )
     
 }
